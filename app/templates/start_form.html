@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1" />
+	<title>Heart Risk Predictor</title>
+	<link rel="stylesheet" href="/static/styles.css" />
+</head>
+<body>
+	<div class="container">
+		<div class="card">
+			<h1>Загрузка CSV для предсказания</h1>
+			<form id="upload-form" enctype="multipart/form-data" method="post" action="/predict-upload">
+				<label for="file">Выберите CSV-файл</label>
+				<input id="file" name="file" type="file" accept=".csv" required />
+				<div class="help">Файл должен содержать колонки набора теста. Максимальный размер зависит от сервера.</div>
+				<button id="submit-btn" type="submit">Предсказать</button>
+				<button id="clear-btn" type="button" class="btn" style="margin-left: 8px; background:#ef4444;">Сбросить предсказания</button>
+			</form>
+			<div id="error" class="error"></div>
+			<div id="success" class="success"></div>
+			<div id="result">
+				<h3>Пример результата</h3>
+				<table class="table" id="preview-table">
+					<thead>
+						<tr><th>id</th><th>prediction</th></tr>
+					</thead>
+					<tbody id="preview-tbody"></tbody>
+				</table>
+			</div>
+		</div>
+	</div>
+
+	<script>
+	const form = document.getElementById('upload-form');
+	const fileInput = document.getElementById('file');
+	const errorBox = document.getElementById('error');
+	const successBox = document.getElementById('success');
+	const submitBtn = document.getElementById('submit-btn');
+	const clearBtn = document.getElementById('clear-btn');
+	const resultWrap = document.getElementById('result');
+	const previewTbody = document.getElementById('preview-tbody');
+
+	function setError(msg) {
+		errorBox.textContent = msg;
+		errorBox.style.display = 'block';
+		successBox.style.display = 'none';
+		resultWrap.style.display = 'none';
+	}
+	function setSuccess(msg) {
+		successBox.textContent = msg;
+		successBox.style.display = 'block';
+		errorBox.style.display = 'none';
+	}
+
+	function getTokenFromQuery() {
+		const url = new URL(window.location.href);
+		return url.searchParams.get('token');
+	}
+
+	function renderPreviewRows(rows) {
+		previewTbody.innerHTML = '';
+		(rows || []).slice(0, 5).forEach(r => {
+			const tr = document.createElement('tr');
+			const tdId = document.createElement('td');
+			tdId.textContent = r.id;
+			const tdPred = document.createElement('td');
+			tdPred.textContent = (typeof r.prediction === 'number') ? r.prediction.toFixed(6) : r.prediction;
+			tr.appendChild(tdId);
+			tr.appendChild(tdPred);
+			previewTbody.appendChild(tr);
+		});
+	}
+
+	function showResultsLink(token, count) {
+		setSuccess(`Предсказаний: ${count}`);
+		const link = document.createElement('a');
+		link.href = `/results/${token}`;
+		link.textContent = 'Открыть все результаты';
+		link.className = 'btn';
+		successBox.appendChild(document.createElement('br'));
+		successBox.appendChild(link);
+	}
+
+	function renderExisting(data, token) {
+		renderPreviewRows(data.predictions || []);
+		resultWrap.style.display = 'block';
+		successBox.innerHTML = '';
+		showResultsLink(token, data.count);
+	}
+
+	// Восстановление
+	(async () => {
+		const existingToken = getTokenFromQuery();
+		if (!existingToken) return;
+		try {
+			const resp = await fetch(`/results/json/${existingToken}`);
+			if (!resp.ok) return;
+			const data = await resp.json();
+			renderExisting(data, existingToken);
+		} catch {}
+	})();
+
+	form.addEventListener('submit', async (e) => {
+		e.preventDefault();
+		errorBox.style.display = 'none';
+		successBox.style.display = 'none';
+		resultWrap.style.display = 'none';
+		successBox.innerHTML = '';
+
+		if (!fileInput.files || !fileInput.files[0]) {
+			return setError('Файл не выбран. Пожалуйста, приложите CSV.');
+		}
+		const file = fileInput.files[0];
+		if (!file.name.toLowerCase().endsWith('.csv')) {
+			return setError('Неверный формат файла. Загрузите CSV.');
+		}
+
+		submitBtn.disabled = true;
+		submitBtn.textContent = 'Загрузка...';
+		try {
+			const formData = new FormData();
+			formData.append('file', file);
+			const resp = await fetch('/predict-upload', { method: 'POST', body: formData });
+			const data = await resp.json();
+			if (!resp.ok) {
+				return setError(data?.detail || 'Ошибка при предсказании');
+			}
+			renderPreviewRows(data.predictions || []);
+			resultWrap.style.display = 'block';
+			showResultsLink(data.token, data.count);
+			// Обновим URL, чтобы можно было вернуться без потери контекста
+			history.replaceState({}, '', `/?token=${data.token}`);
+		} catch (err) {
+			setError('Сетевая ошибка. Попробуйте позже.');
+		} finally {
+			submitBtn.disabled = false;
+			submitBtn.textContent = 'Предсказать';
+		}
+	});
+
+	clearBtn.addEventListener('click', async () => {
+		errorBox.style.display = 'none';
+		successBox.style.display = 'none';
+		resultWrap.style.display = 'none';
+		successBox.innerHTML = '';
+		previewTbody.innerHTML = '';
+		const token = getTokenFromQuery();
+		if (!token) {
+			return setError('Нет активных результатов для удаления.');
+		}
+		try {
+			const resp = await fetch(`/results/${token}`, { method: 'DELETE' });
+			if (!resp.ok) {
+				return setError('Не удалось удалить результаты.');
+			}
+			// Очистим URL и состояние
+			history.replaceState({}, '', '/');
+			setSuccess('Результаты удалены.');
+		} catch (err) {
+			setError('Сетевая ошибка. Попробуйте позже.');
+		}
+	});
+	</script>
+</body>
+</html>
